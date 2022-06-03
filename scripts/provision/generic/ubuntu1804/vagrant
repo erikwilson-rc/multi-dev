@@ -1,0 +1,40 @@
+#!/bin/bash
+set -ve
+
+# ---
+apt-get update
+apt-get install -y \
+  autoconf \
+  build-essential \
+  ca-certificates \
+  clang-13 \
+  curl \
+  docker.io \
+  gcc \
+  gdb \
+  git \
+  jq \
+  libffi-dev \
+  libmagic-dev \
+  libpcap-dev \
+  libseccomp-dev \
+  libsqlite3-dev \
+  libselinux1-dev \
+  libtool \
+  libuv1-dev \
+  make \
+  musl-dev \
+  musl-tools \
+  npm \
+  pkg-config \
+  python3 \
+  squashfs-tools \
+  tar \
+  wget \
+  vim \
+  zip \
+  zlib1g-dev \
+  zstd
+
+# ---
+setup_dev_tools

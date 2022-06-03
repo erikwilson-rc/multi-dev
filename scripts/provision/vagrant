@@ -1,0 +1,139 @@
+#!/bin/bash
+set -ve -o pipefail
+
+PROVISION="$PROJ_HOME/scripts/provision/$BOX/vagrant"
+
+if [ ! -f /etc/vagrant_box_build_time ]; then
+    echo 'This script should only be called during vagrant provisioning'
+    exit 1
+fi
+
+if [[ "$HOME" = /go/* ]]; then
+    echo 'Must not launch vagrant from /go/'
+    exit 1
+fi
+
+[ ! -d "$HOME" ] && mkdir -p "$HOME"
+
+# --- Setup go path
+if [ -z "${GOPATH}" ]; then
+    GOPATH="$HOME/go"
+    echo "WARNING: Assuming GOPATH=$GOPATH"
+else
+    echo "Using parent GOPATH=$GOPATH"
+fi
+
+# --- Setup basic env
+cat <<EOF >/etc/profile.d/env.sh
+export GO111MODULE=off
+export GOPATH="$GOPATH"
+export KERNEL_HEADER_VERSION="\$(uname -r)"
+export PATH="/usr/local/bin:\$PATH:$HOME/.golang/current/bin:$GOPATH/bin"
+export HOME="$HOME" && cd
+EOF
+. /etc/profile.d/env.sh
+
+# --- Set color prompt
+sed -i 's|:/bin/ash$|:/bin/bash|g' /etc/passwd
+cat <<\EOF >/etc/profile.d/color.sh
+alias ls='ls --color=auto'
+export PS1='\033[31m[ \033[90m\D{%F 🔧 %T}\033[31m ]\n\[\033[36m\]\u\[\033[m\]@\[\033[32m\]\h\[\033[35m\]:\[\033[33;1m\]\w\[\033[m\]\$ '
+EOF
+
+# --- Default to root user for vagrant ssh
+cat <<\EOF >/etc/profile.d/root.sh
+[ $EUID -ne 0 ] && exec sudo -i
+EOF
+
+# --- Launch ssh-agent for user
+cat <<EOF >/etc/profile.d/ssh-agent.sh
+eval \$(ssh-agent -s)
+ssh-add "$USER_HOME/.ssh/"* 2>&1 | grep "added"
+EOF
+
+# --- Enable IPv6 and IP forwarding
+sysctl -w net.ipv4.ip_forward=1
+sysctl -w net.ipv6.conf.all.disable_ipv6=0
+sysctl -w net.ipv6.conf.all.forwarding=1
+sed -i \
+    -e "/^net.ipv6.conf.all.disable_ipv6 = 1/d" \
+    /etc/sysctl.conf
+cat <<EOF >>/etc/sysctl.conf
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.all.forwarding = 1
+EOF
+
+# --- Utility functions for downloading extras
+setup_gitconfig() {
+    if [ ! -f "$HOME/.gitconfig" ]; then
+        echo "Setup gitconfig"
+        [ -f "$USER_HOME/.gitconfig" ] && cp "$USER_HOME/.gitconfig" "$HOME"
+        # workaround for ownership issues
+        git config --global --add safe.directory '*'
+    fi
+}
+
+install_go() {
+    local goversion=${GOVERSION:-1.18.3}
+    local goarch=${GOARCH:-amd64}
+    if [ -z "$goversion" ] || [ -z "$goarch" ]; then
+        echo 'Cannot find version of go to fetch'
+        return 1
+    fi
+    local goloc=".golang/$goversion-$goarch"
+    if [ ! -d "$goloc" ]; then
+        mkdir -p "$goloc"
+        echo "Installing go $goversion"
+        curl -sL "https://storage.googleapis.com/golang/go${goversion}.linux-${goarch}.tar.gz" | tar -xzf - -C "$goloc"
+    fi
+    ln -nsf "$goversion-$goarch/go" .golang/current
+}
+
+install_dlv() {
+    if [ -z "$(which dlv)" ]; then
+        echo "Installing dlv"
+        go get -u github.com/go-delve/delve/cmd/dlv
+    fi
+}
+
+install_rustup() {
+    if [ ! -d "$HOME/.rustup" ]; then
+        echo "Installing rustup"
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
+        rustup target add x86_64-unknown-linux-musl
+    fi
+}
+
+setup_dev_tools() {
+    {
+        setup_gitconfig && \
+        install_go && \
+        install_dlv && \
+        install_rustup
+    } || exit 1
+}
+
+# --- Add motd
+cat <<\EOF >/etc/motd
+         __
+ _(\    |0o|
+(__/\,__'\/'___
+   \___|.--.|  |   __
+       \ }{ /\ )_ / _\
+       /\  /\ \__x (__
+      (--/\--)    \__/
+      _)(  )(_
+     `'''  '''`
+EOF
+
+# --- Run vagrant provision script if available
+{
+    if [ ! -f  "$PROVISION" ]; then
+        echo "WARNING: Unable to execute provision script \"$PROVISION\""
+    else
+        echo "running '$PROVISION'..."
+        . "$PROVISION"
+    fi
+} && echo "finished!"
